@@ -51,8 +51,8 @@ app.get("/execute-range", async (req, res) => {
   const start = parseInt(req.query.start);
   const end = parseInt(req.query.end);
 
-  if (isNaN(start) || isNaN(end)) {
-    return res.status(400).json({ error: "Invalid start or end" });
+  if (isNaN(start) || isNaN(end) || start < end) {
+    return res.status(400).json({ error: "Invalid 'start' or 'end' parameters. Must be numbers and start >= end." });
   }
 
   const results = [];
@@ -64,11 +64,12 @@ app.get("/execute-range", async (req, res) => {
       const assetIndex = order.assetIndex.toNumber();
 
       if (user === "0x0000000000000000000000000000000000000000") {
-        console.log(`⚠️ Order ${i} deleted`);
+        console.log(`⚠️ Order #${i} skipped (user = 0x0)`);
         results.push({ orderId: i, status: "skipped", reason: "deleted" });
         continue;
       }
 
+      console.log(`📄 Fetching proof for Order #${i} | index ${assetIndex}`);
       const proofRes = await fetch("https://proof-production.up.railway.app/get-proof", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -79,26 +80,31 @@ app.get("/execute-range", async (req, res) => {
       const proof = proofData.proof_bytes;
 
       if (!proof) {
-        results.push({ orderId: i, status: "failed", reason: "no proof" });
+        results.push({ orderId: i, status: "failed", reason: "no proof returned" });
         continue;
       }
 
       const tx = await contract.executePendingOrder(i, proof, { gasLimit: 800000 });
       await tx.wait();
 
-      console.log(`✅ Order ${i} executed`);
+      console.log(`✅ Order #${i} executed. Tx: ${tx.hash}`);
       results.push({ orderId: i, status: "executed", tx: tx.hash });
 
     } catch (err) {
-      console.error(`❌ Error on order ${i}:`, err.reason || err.message);
+      console.error(`❌ Order #${i} failed:`, err.reason || err.message);
       results.push({ orderId: i, status: "error", reason: err.reason || err.message });
     }
   }
 
-  res.json({ result: results });
+  res.json({
+    total: results.length,
+    executed: results.filter(r => r.status === "executed").length,
+    skipped: results.filter(r => r.status === "skipped").length,
+    failed: results.filter(r => r.status === "failed" || r.status === "error").length,
+    result: results
+  });
 });
 
 app.listen(port, () => {
-  console.log(`🟢 Server running on http://localhost:${port}`);
+  console.log(`🟢 API running at http://localhost:${port}`);
 });
-
